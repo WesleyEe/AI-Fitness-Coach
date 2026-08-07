@@ -6,7 +6,7 @@ Each sprint = one reviewable increment. We stop after each one for your review b
 |---|---|---|
 | 1 | Project foundation | Service architecture, containerization, backend/frontend wiring |
 | 2 | Fitness data management | DB schema design, migrations, CRUD APIs, ORM |
-| 3 | Basic LLM integration | LLM app architecture, prompt engineering |
+| 3 | Basic LLM integration | Raw LLM API mechanics, prompt engineering, container-to-host networking |
 | 4 | RAG system | Embeddings, vector search, retrieval pipelines |
 | 5 | LangGraph agent | Agent architecture, state machines, tool calling |
 | 6 | Personalized coaching intelligence | Multi-source reasoning, follow-up questioning |
@@ -83,9 +83,35 @@ Three containers via Docker Compose: `postgres` (empty DB, just proving connecti
 
 ---
 
-## Sprint 3: Basic LLM Integration (preview only)
+## Sprint 3: Basic LLM Integration
 
-Chat endpoint, single LLM call (no agent, no tools yet), simple conversation state. Goal: understand raw LLM API mechanics before adding orchestration complexity.
+**Goal:** A working chat interface talking to a real local LLM (Ollama + Qwen). No agent, no tools, no data access yet — just understand what a raw LLM chat request/response actually looks like before Sprint 5 wraps it in orchestration.
+
+**Architecture for this sprint:**
+- Called Ollama's `/api/chat` REST endpoint directly via `httpx`, deliberately **not** through LangChain yet — introducing that abstraction now would hide the exact mechanics this sprint exists to teach. LangChain/LangGraph arrives in Sprint 5 when tool-calling and multi-step orchestration actually need it.
+- **Conversation state lives entirely on the client.** The React app holds the message array in local state and sends the *full* history on every turn; the backend is stateless per-request — it just prepends a system prompt and forwards to Ollama. Persisting conversations to Postgres is a natural Sprint 6 addition once personalization needs to reference past chats, not before.
+- A small `SYSTEM_PROMPT` ([app/llm/prompts.py](../code/projects/fitness_coach_ai/backend/app/llm/prompts.py)) gives the model a fitness-coach persona and is explicit about what it *doesn't* have access to yet (workout history, injuries, a knowledge base) — first hands-on prompt engineering.
+
+**Implementation tasks:**
+1. `Settings.ollama_base_url` / `ollama_model` — same `pydantic-settings` pattern as `database_url`.
+2. [app/llm/ollama_client.py](../code/projects/fitness_coach_ai/backend/app/llm/ollama_client.py) — thin async wrapper over Ollama's chat API, raising a typed `LLMServiceError` on failure.
+3. `ChatMessage`/`ChatRequest`/`ChatResponse` Pydantic schemas, `POST /chat` route.
+4. React `Chat` component: message list + input, full-history-per-turn.
+5. `docker-compose.yml`: backend gets `OLLAMA_BASE_URL=http://host.docker.internal:11434` (Ollama runs on the host, not in a container) plus `extra_hosts: host.docker.internal:host-gateway` so that resolves on Linux Docker too, not just Mac/Windows.
+
+**Testing:**
+- Unit tests mock the LLM call (`pytest-mock`) to verify route/schema behavior (happy path, `503` when Ollama's unreachable, `422` on a malformed body) without needing a model loaded — fast, deterministic.
+- Manual end-to-end verification against the **real** local Ollama (`qwen2.5:3b`), both running the backend directly on the host and through the full `docker compose` stack — confirmed the football/injury example questions from the app concept get real, on-topic answers, and confirmed the container can actually reach host Ollama via `host.docker.internal`.
+
+**Learning objectives:**
+- What a raw LLM chat completion request/response actually contains (`{"model", "messages": [{"role", "content"}], "stream"}` in, `{"message": {"role", "content"}}` out) — this is the shape LangChain will abstract away starting Sprint 5, so it's worth having seen it bare first.
+- System prompts as the mechanism for persona + honesty about capability boundaries ("ask rather than guess" when data is missing) — this becomes load-bearing once Sprint 5 adds real tools the model can choose to call.
+- Client-held vs. server-held conversation state, and why "server is stateless per request" is the simpler starting point.
+- Container networking for a host-run dependency: `host.docker.internal` lets a container reach services running on the host machine (as opposed to `depends_on` + a service name, which is for container-to-container).
+
+**Possible future improvements (not now):** streaming responses (Ollama supports `stream: true`; UI would need to handle incremental tokens), persisting conversations to Postgres, swapping the direct `httpx` client for LangChain's Ollama wrapper once Sprint 5 needs the rest of LangChain anyway.
+
+---
 
 ## Sprint 4: RAG System (preview only)
 

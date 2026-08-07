@@ -20,6 +20,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://fitness:fitness@postgres:5432/fitness_coach}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
     ports:
       - "8001:8000"
     depends_on:
@@ -27,6 +29,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+    extra_hosts:
+      # host.docker.internal works out of the box on Docker Desktop/OrbStack (Mac/Windows);
+      # this makes it also resolve on plain Linux Docker, where it doesn't by default.
+      - "host.docker.internal:host-gateway"
 
   frontend:
     build: ./frontend

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, injuries, users, workouts
+from app.api.routes import chat, health, injuries, users, workouts
 
 app = FastAPI(title="Fitness Coach AI Assistant")
 
@@ -16,3 +16,4 @@ app.include_router(health.router)
 app.include_router(users.router)
 app.include_router(workouts.router)
 app.include_router(injuries.router)
+app.include_router(chat.router)

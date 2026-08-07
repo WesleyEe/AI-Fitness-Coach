@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Chat from './Chat'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -14,17 +15,15 @@ function App() {
   }, [])
 
   return (
-    <main style={{ textAlign: 'center', maxWidth: 480 }}>
+    <main style={{ textAlign: 'center', maxWidth: 640, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
       <h1>Fitness Coach AI Assistant</h1>
-      <p>Sprint 1: foundation check</p>
       {error && <p style={{ color: 'crimson' }}>Backend unreachable: {error}</p>}
-      {!error && !health && <p>Checking backend health…</p>}
       {health && (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          <li>API status: {health.status}</li>
-          <li>Database connected: {String(health.db_connected)}</li>
-        </ul>
+        <p style={{ fontSize: '0.85rem', opacity: 0.6 }}>
+          API: {health.status} · DB connected: {String(health.db_connected)}
+        </p>
       )}
+      <Chat />
     </main>
   )
 }

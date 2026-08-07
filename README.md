@@ -2,7 +2,7 @@
 
 A learning-focused project to build a personal AI fitness coach, incrementally, one Scrum-style sprint at a time — while deeply learning the modern AI application stack (agentic systems, LangGraph, RAG, PostgreSQL, FastAPI, Docker, Kubernetes).
 
-Status: **Sprint 2 complete — fitness data (users, workouts, sport sessions, injuries) persisted via a real schema with migrations and CRUD APIs.**
+Status: **Sprint 3 complete — chat UI talking to a local LLM (Ollama + Qwen), no agent/data access yet.**
 
 See [PLAN.md](PLAN.md) for the full sprint roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
 
@@ -21,10 +21,12 @@ cp .env.example .env
 docker compose up --build
 ```
 
-- Frontend: http://localhost:5173 — shows API status and DB connectivity
+- Frontend: http://localhost:5173 — chat UI, plus API/DB status
 - Backend: http://localhost:8001/health — `{"status": "ok", "db_connected": true}`
-- Backend interactive docs: http://localhost:8001/docs — try `users`, `workouts`, `injuries`
+- Backend interactive docs: http://localhost:8001/docs — try `users`, `workouts`, `injuries`, `chat`
 - The backend container runs `alembic upgrade head` automatically before starting, so the schema is always up to date on `docker compose up`.
+
+**Requires Ollama running on your host** with the model in `OLLAMA_MODEL` (default `qwen2.5:3b`) pulled — `ollama pull qwen2.5:3b`, then just have Ollama running (`ollama serve` or the desktop app) before `docker compose up`. The backend container reaches it via `host.docker.internal`, not `localhost` (see `docker-compose.yml`) — the app itself doesn't run an LLM, it calls out to your existing local Ollama install.
 
 Note: the backend and Postgres host ports are `8001` and `5434` (not the defaults `8000`/`5432`) because those were already bound by another local setup on this machine when this project was built. Adjust `docker-compose.yml` / `.env` if that's not the case for you.
 
