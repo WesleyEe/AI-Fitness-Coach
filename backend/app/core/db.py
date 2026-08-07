@@ -1,5 +1,7 @@
+from collections.abc import Generator
+
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
@@ -14,3 +16,12 @@ def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+def get_db() -> Generator[Session, None, None]:
+    """FastAPI dependency: yields one session per request, always closed after."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
