@@ -5,6 +5,7 @@ from app.models.football_session import FootballSession
 from app.models.hyrox_session import HyroxSession
 from app.models.running_session import RunningSession
 from app.models.injury import Injury
+from app.models.knowledge_chunk import KnowledgeChunk
 
 __all__ = [
     "Base",
@@ -14,4 +15,5 @@ __all__ = [
     "HyroxSession",
     "RunningSession",
     "Injury",
+    "KnowledgeChunk",
 ]
