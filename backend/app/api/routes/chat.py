@@ -1,10 +1,11 @@
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 
+from app.agent.graph import build_agent_graph
 from app.core.db import get_db
-from app.llm.ollama_client import LLMServiceError, send_chat
-from app.llm.prompts import SYSTEM_PROMPT, build_knowledge_context
-from app.rag.retriever import search as rag_search
+from app.llm.ollama_client import LLMServiceError
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 
 router = APIRouter(tags=["chat"])
@@ -12,24 +13,31 @@ router = APIRouter(tags=["chat"])
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [
+        HumanMessage(m.content) if m.role == "user" else AIMessage(m.content)
+        for m in payload.messages
+    ]
 
-    # Naive RAG: always retrieve for the latest user message, no judgment call about
-    # whether this particular question needs expert reference material - see
-    # build_knowledge_context()'s docstring and PLAN.md's Sprint 4/5 notes.
-    latest_user_message = next(
-        (m.content for m in reversed(payload.messages) if m.role == "user"), None
-    )
+    initial_state = {
+        "messages": messages,
+        "user_id": payload.user_id,
+        "needs_personal_data": False,
+        "needs_expert_knowledge": False,
+        "classification_reasoning": "",
+        "personal_context": None,
+        "knowledge_context": None,
+        "analysis": None,
+        "response": None,
+    }
+
+    graph = build_agent_graph(db)
     try:
-        if latest_user_message:
-            chunks = await rag_search(db, latest_user_message)
-            knowledge_context = build_knowledge_context(chunks)
-            if knowledge_context:
-                messages.append({"role": "system", "content": knowledge_context})
-
-        messages += [m.model_dump() for m in payload.messages]
-        reply_text = await send_chat(messages)
+        final_state = await graph.ainvoke(initial_state)
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"Could not reach Ollama: {exc}"
+        ) from exc
     except LLMServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    return ChatResponse(message=ChatMessage(role="assistant", content=reply_text))
+    return ChatResponse(message=ChatMessage(role="assistant", content=final_state["response"]))

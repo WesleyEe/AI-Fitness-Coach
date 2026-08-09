@@ -2,7 +2,7 @@
 
 A learning-focused project to build a personal AI fitness coach, incrementally, one Scrum-style sprint at a time — while deeply learning the modern AI application stack (agentic systems, LangGraph, RAG, PostgreSQL, FastAPI, Docker, Kubernetes).
 
-Status: **Sprint 4 complete — chat is now RAG-augmented with a real fitness knowledge base (pgvector + local embeddings). No agent yet — Sprint 5.**
+Status: **Sprint 5 complete — chat is now a LangGraph agent that decides per-question whether it needs your workout/injury history, expert knowledge, both, or neither, before answering.**
 
 See [PLAN.md](PLAN.md) for the full sprint roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
 
@@ -29,6 +29,10 @@ docker compose up --build
 **Requires Ollama running on your host** with both `OLLAMA_MODEL` (default `qwen2.5:3b`) and `OLLAMA_EMBED_MODEL` (default `nomic-embed-text`) pulled — `ollama pull qwen2.5:3b && ollama pull nomic-embed-text`, then just have Ollama running (`ollama serve` or the desktop app) before `docker compose up`. The backend container reaches it via `host.docker.internal`, not `localhost` (see `docker-compose.yml`) — the app itself doesn't run an LLM, it calls out to your existing local Ollama install.
 
 **Requires the knowledge base to be ingested at least once** (see below) before `/chat` or `/rag/search` will have anything meaningful to retrieve — this doesn't happen automatically on `docker compose up`, since it's a content-population step, not a schema migration.
+
+The chat UI now has an optional numeric **User ID** field — create a user via `POST /users` (or `/docs`), note its `id`, and enter it in the chat UI so the agent can pull that user's workout/injury history when a question needs it. Without one, personal-history questions get answered honestly ("no user_id was provided") rather than fabricated.
+
+Expect `/chat` responses to take **20-40+ seconds** — the agent makes up to 3 sequential LLM calls (classify → reason → recommend) plus an embedding call, all against a small local CPU model. This is a real, visible cost of the agentic approach worth noticing, not a bug.
 
 Note: the backend and Postgres host ports are `8001` and `5434` (not the defaults `8000`/`5432`) because those were already bound by another local setup on this machine when this project was built. Adjust `docker-compose.yml` / `.env` if that's not the case for you.
 

@@ -5,6 +5,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 function Chat() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
+  const [userId, setUserId] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
 
@@ -14,7 +15,7 @@ function Chat() {
     if (!text || sending) return
 
     // The client holds the full conversation and sends it every turn -
-    // the backend has no session state in Sprint 3 (see PLAN.md).
+    // the backend has no session state between requests.
     const nextMessages = [...messages, { role: 'user', content: text }]
     setMessages(nextMessages)
     setInput('')
@@ -25,7 +26,12 @@ function Chat() {
       const response = await fetch(`${API_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: nextMessages }),
+        body: JSON.stringify({
+          messages: nextMessages,
+          // No auth yet (Sprint 5) - a user id you created via POST /users lets the
+          // agent look up your workout/injury history when a question needs it.
+          user_id: userId ? Number(userId) : null,
+        }),
       })
       if (!response.ok) {
         throw new Error(`Backend returned ${response.status}`)
@@ -41,6 +47,19 @@ function Chat() {
 
   return (
     <section style={{ width: '100%', maxWidth: 600, textAlign: 'left' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        <label style={{ fontSize: '0.85rem', opacity: 0.7 }}>
+          User ID (optional - lets the coach use your workout/injury history):
+        </label>
+        <input
+          type="number"
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+          placeholder="e.g. 1"
+          style={{ width: 70, padding: '0.25rem' }}
+        />
+      </div>
+
       <div
         style={{
           border: '1px solid #ccc',

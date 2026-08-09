@@ -1,11 +1,24 @@
-from app.llm.ollama_client import LLMServiceError
-from app.models.knowledge_chunk import KnowledgeDomain
-from app.rag.retriever import RetrievedChunk
+import httpx
+
+
+def _fake_graph(final_state: dict):
+    """A stand-in for the compiled LangGraph graph, exposing just the .ainvoke()
+    surface the chat route actually calls - keeps these tests about the route's
+    request/response handling, independent of graph/node internals (which have
+    their own focused tests in test_agent_*.py)."""
+
+    class FakeGraph:
+        async def ainvoke(self, state):
+            return final_state
+
+    return FakeGraph()
 
 
 def test_chat_returns_assistant_reply(client, mocker):
-    mocker.patch("app.api.routes.chat.rag_search", return_value=[])
-    mocker.patch("app.api.routes.chat.send_chat", return_value="Do 3x10 squats today.")
+    mocker.patch(
+        "app.api.routes.chat.build_agent_graph",
+        return_value=_fake_graph({"response": "Do 3x10 squats today."}),
+    )
 
     response = client.post(
         "/chat",
@@ -18,51 +31,55 @@ def test_chat_returns_assistant_reply(client, mocker):
     assert body["message"]["content"] == "Do 3x10 squats today."
 
 
-def test_chat_includes_retrieved_knowledge_in_llm_context(client, mocker):
-    mocker.patch(
-        "app.api.routes.chat.rag_search",
-        return_value=[
-            RetrievedChunk(
-                domain=KnowledgeDomain.HYROX,
-                title="Sled Push and Pull Programming",
-                content="Programming heavy sled pushes once per week...",
-                distance=0.1,
-            )
-        ],
-    )
-    send_chat_mock = mocker.patch(
-        "app.api.routes.chat.send_chat", return_value="Focus on heavy sled pushes weekly."
-    )
+def test_chat_passes_user_id_through_to_initial_state(client, mocker):
+    captured_states = []
 
-    response = client.post(
+    class CapturingGraph:
+        async def ainvoke(self, state):
+            captured_states.append(state)
+            return {"response": "ok"}
+
+    mocker.patch("app.api.routes.chat.build_agent_graph", return_value=CapturingGraph())
+
+    client.post(
         "/chat",
-        json={"messages": [{"role": "user", "content": "How do I improve my sled push?"}]},
+        json={"messages": [{"role": "user", "content": "hi"}], "user_id": 42},
     )
 
-    assert response.status_code == 200
-    # The knowledge chunk should have been folded into the messages sent to the LLM.
-    sent_messages = send_chat_mock.call_args[0][0]
-    combined_content = " ".join(m["content"] for m in sent_messages)
-    assert "Sled Push and Pull Programming" in combined_content
+    assert captured_states[0]["user_id"] == 42
+
+
+def test_chat_converts_message_history_to_langchain_messages(client, mocker):
+    captured_states = []
+
+    class CapturingGraph:
+        async def ainvoke(self, state):
+            captured_states.append(state)
+            return {"response": "ok"}
+
+    mocker.patch("app.api.routes.chat.build_agent_graph", return_value=CapturingGraph())
+
+    client.post(
+        "/chat",
+        json={
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello!"},
+            ]
+        },
+    )
+
+    messages = captured_states[0]["messages"]
+    assert [m.type for m in messages] == ["human", "ai"]
+    assert [m.content for m in messages] == ["hi", "hello!"]
 
 
 def test_chat_returns_503_when_ollama_unreachable(client, mocker):
-    mocker.patch("app.api.routes.chat.rag_search", return_value=[])
-    mocker.patch(
-        "app.api.routes.chat.send_chat",
-        side_effect=LLMServiceError("Could not reach Ollama"),
-    )
+    class FailingGraph:
+        async def ainvoke(self, state):
+            raise httpx.ConnectError("Connection refused")
 
-    response = client.post("/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
-
-    assert response.status_code == 503
-
-
-def test_chat_returns_503_when_retriever_embedding_fails(client, mocker):
-    mocker.patch(
-        "app.api.routes.chat.rag_search",
-        side_effect=LLMServiceError("Could not reach Ollama"),
-    )
+    mocker.patch("app.api.routes.chat.build_agent_graph", return_value=FailingGraph())
 
     response = client.post("/chat", json={"messages": [{"role": "user", "content": "Hi"}]})
 

@@ -8,7 +8,7 @@ Each sprint = one reviewable increment. We stop after each one for your review b
 | 2 | Fitness data management | DB schema design, migrations, CRUD APIs, ORM |
 | 3 | Basic LLM integration | Raw LLM API mechanics, prompt engineering, container-to-host networking |
 | 4 | RAG system | Chunking, embeddings, pgvector similarity search, naive vs. agentic retrieval |
-| 5 | LangGraph agent | Agent architecture, state machines, tool calling |
+| 5 | LangGraph agent | State graphs, conditional edges, structured output, multi-step reasoning |
 | 6 | Personalized coaching intelligence | Multi-source reasoning, follow-up questioning |
 | 7 | Kubernetes deployment | Cloud-native concepts, manifests, Helm |
 
@@ -152,9 +152,48 @@ Three containers via Docker Compose: `postgres` (empty DB, just proving connecti
 
 ---
 
-## Sprint 5: LangGraph Agent (preview only)
+## Sprint 5: LangGraph Agent
 
-Replace the single LLM call with a LangGraph graph: intent analysis → tool routing (DB tool / RAG tool) → reasoning → recommendation.
+**Goal:** Replace naive "always retrieve" RAG with an actual decision. The agent looks at each question and decides — via a real conditional branch in a state graph, not an if-statement buried in a route — whether it needs personal history, expert knowledge, both, or neither, before generating a response.
+
+**Architecture for this sprint:**
+```
+START → classify_intent → [conditional] → fetch_context → reason → recommend → END
+                        ↘ [conditional, nothing needed] ──────────↗
+```
+- **Why LangChain now, not before**: Sprint 3 used raw `httpx` deliberately, to see request/response mechanics bare. LangGraph's actual value — a state machine where nodes are functions over shared state and edges are chosen by code at runtime — needed that groundwork first. `app/agent/llm.py` introduces `ChatOllama` (LangChain's chat model wrapper) for the agent; the Sprint 3 raw `httpx` client in `app/llm/ollama_client.py` is untouched and still used for embeddings.
+- **`classify_intent`**: one LLM call using `.with_structured_output()` against a Pydantic schema (`needs_personal_data: bool`, `needs_expert_knowledge: bool`, `reasoning: str`) — forces a validated object back, not free text to parse. Verified empirically against `qwen2.5:3b` before building the rest of the graph around it (worth doing before committing to a design — small local models don't universally support this well).
+- **`fetch_context`**: the one genuine conditional edge in the graph (`add_conditional_edges`, not a no-op node) — skipped entirely, not just no-op'd, when neither flag is set. When it does run, it's the *same* DB queries and RAG retriever from Sprints 2 and 4 — the agent doesn't invent new capability, it orchestrates what already exists.
+- **`reason` → `recommend`**: two sequential LLM calls rather than one, deliberately, to actually demonstrate multi-step graph flow (not just branching). `reason` produces an internal analysis (never shown to the user); `recommend` turns that into the final reply.
+- **State (`AgentState`)** holds conversation messages, `user_id`, classification flags, gathered context, analysis, and the final response — but deliberately *not* a live DB session. The graph is built fresh per-request via `build_agent_graph(db)`, a factory that closes `fetch_context` over that request's session, rather than threading a `Session` object through state.
+- **Personalization needs a user**: still no auth, so `ChatRequest` gained an optional `user_id`; the frontend now has a plain numeric input for it. Missing `user_id` on a personal-data question doesn't fabricate anything — `fetch_context` says so explicitly, consistent with the "ask rather than guess" system-prompt philosophy from Sprint 3.
+
+**Implementation tasks:**
+1. `app/agent/state.py` (`AgentState` TypedDict), `app/agent/llm.py` (shared `ChatOllama`).
+2. `app/agent/nodes/classify.py`, `context.py`, `reason.py`, `recommend.py`.
+3. `app/agent/graph.py` — `build_agent_graph(db)`, the conditional routing function, edge wiring.
+4. `ChatRequest.user_id` added; `/chat` route rewritten to convert `ChatMessage`s to LangChain message objects, build initial state, invoke the graph, and map `httpx.ConnectError` to the same `503` as before.
+5. Removed the now-dead naive-RAG code from Sprint 4 (`build_knowledge_context` in `app/llm/prompts.py`) since `/chat` no longer calls it directly — the agent's `fetch_context` does its own formatting.
+6. Frontend: numeric `user_id` input in the chat UI.
+
+**Testing:**
+- Routing logic (`_route_after_classify`) tested as pure functions — no mocking needed.
+- `fetch_context` tested against a real seeded DB (workouts/injuries) with the RAG call mocked — covers personal-data-present, no-`user_id`, no-history-found, knowledge-present, and both-needed paths.
+- Full-graph integration tests with the LLM mocked at the node-module level (not the shared object) — `ChatOllama` is a Pydantic model and doesn't support `mocker.patch.object()` on an instance the normal way (Pydantic restricts instance attribute set/delete, which breaks the mock's teardown); also, since each node module did `from app.agent.llm import llm`, patching the source module's `llm` name wouldn't reach those already-bound references anyway. Fixed by patching `llm` directly in each of the three consuming node modules.
+- `/chat` route tests mock `build_agent_graph` itself, returning a small fake graph object — keeps route tests about request/response handling, independent of what's already covered by the node/graph-specific tests above.
+- Manual end-to-end verification, both on host and through `docker compose`, using the actual example questions from the app concept — inspected intermediate state directly (not just the final answer) to separate "is the plumbing correct" from "is the model's reasoning good": for a seeded ankle-injury user asking "can I start running again?", classification correctly set `needs_personal_data=True`, the DB query correctly pulled the seeded injury/workout rows, and the reasoning step's analysis did incorporate them — confirming the architecture works. The *final* answer was still somewhat generic rather than sharply citing "your record says no running yet" — an honest limitation of a 3B local model's context utilization, not a bug, and a good target for Sprint 6's "deepen the reasoning node."
+
+**Learning objectives:**
+- The actual mechanics of a LangGraph state graph: nodes as `(state) -> dict` partial updates, edges (including conditional ones chosen by a plain Python function) deciding control flow, `.ainvoke()` for async graphs.
+- Structured output (`.with_structured_output()`) as a more reliable alternative to asking an LLM to "return JSON" and parsing it yourself.
+- Splitting reasoning from recommendation as two sequential LLM calls — a real (if costly, ~40s total on this local setup) example of multi-step reasoning, not just single-call prompting.
+- Why live infrastructure objects (a DB session) don't belong in graph *state* — state should be request/response-shaped data; a factory function closing over per-request dependencies is the cleaner seam.
+- Mocking a Pydantic-based object's instance methods doesn't work the way it does for plain Python objects — and why patching a "from X import Y" name has to happen at the *importing* module, not the source module.
+- Verifying an agent by inspecting intermediate state, not just the final text — the only way to tell "wrong plumbing" apart from "correct plumbing, mediocre model output" during debugging.
+
+**Possible future improvements (not now):** streaming intermediate steps to the frontend (e.g. showing "checking your history..." while `fetch_context` runs), a larger/hosted model for sharper context utilization, giving the model actual tool-calling (letting it decide *what* to query, not just whether to), clarification loops when `fetch_context` finds nothing useful — explicitly deferred to Sprint 6.
+
+---
 
 ## Sprint 6: Personalized Coaching Intelligence (preview only)
 
