@@ -28,6 +28,8 @@ class AgentState(TypedDict):
 
     # Set by reason
     analysis: str | None
+    needs_clarification: bool
+    clarification_question: str | None
 
-    # Set by recommend - the final answer returned to the user
+    # Set by recommend or ask_clarification - the final answer returned to the user
     response: str | None

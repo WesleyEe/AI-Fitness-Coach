@@ -9,7 +9,7 @@ Each sprint = one reviewable increment. We stop after each one for your review b
 | 3 | Basic LLM integration | Raw LLM API mechanics, prompt engineering, container-to-host networking |
 | 4 | RAG system | Chunking, embeddings, pgvector similarity search, naive vs. agentic retrieval |
 | 5 | LangGraph agent | State graphs, conditional edges, structured output, multi-step reasoning |
-| 6 | Personalized coaching intelligence | Multi-source reasoning, follow-up questioning |
+| 6 | Personalized coaching intelligence | Clarification loops, structured output's real limits, LLM hallucination despite correct context |
 | 7 | Kubernetes deployment | Cloud-native concepts, manifests, Helm |
 
 ---
@@ -195,9 +195,43 @@ START → classify_intent → [conditional] → fetch_context → reason → rec
 
 ---
 
-## Sprint 6: Personalized Coaching Intelligence (preview only)
+## Sprint 6: Personalized Coaching Intelligence
 
-Deepen the reasoning node to cross-reference injury history, training history, and retrieved guidance; add clarification loops when data is missing.
+**Goal:** Close the two gaps Sprint 5 identified through its own verification — generic reasoning that didn't sharply cite context, and no way for the agent to say "I don't have enough to answer this safely" instead of pushing through with a guess.
+
+**Architecture for this sprint:**
+```
+START → classify_intent → [cond] → fetch_context → reason → [cond] → recommend → END
+                        ↘ nothing needed ────────↗        ↘ ask_clarification → END
+```
+- **`reason` now returns structured output** (`ReasoningResult`: `analysis`, `needs_clarification: bool`, `clarification_question: str | None`) — a second use of `.with_structured_output()`, reinforcing the Sprint 5 pattern with a different schema. Its prompt was tightened twice, based on real observed model behavior (see Testing below): first to explicitly demand citing specific facts (dates, restrictions, exact figures) instead of paraphrasing, then to explicitly force `needs_clarification=true` when gathered context says personal data is unavailable and the question is safety-sensitive.
+- **`ask_clarification`** is a new terminal node, reached via a second real conditional edge (`_route_after_reason`). Deliberately **not an LLM call** — `clarification_question` is already model-generated text from `reason`, so this node is pure flow control, carrying it through to the response. Not every node needs to hit the model, and skipping a 4th sequential LLM call matters given Sprint 5's already-slow ~40s baseline.
+- **A defensive fallback in `reason()`**: if the model sets `needs_clarification=true` but leaves `clarification_question` empty — which it did, in testing — a generic fallback question is substituted rather than letting that silently produce a blank response. Structured output constrains the *shape* of a response (valid JSON matching the schema); it does not guarantee the model fills every field consistently with the others. Treat LLM output as untrusted even when its shape is enforced.
+
+**Implementation tasks:**
+1. `ReasoningResult` schema + rewritten `reason()` in `app/agent/nodes/reason.py`, prompt tightened iteratively against real model output.
+2. `app/agent/nodes/ask_clarification.py` — trivial pass-through node.
+3. `AgentState` gained `needs_clarification`, `clarification_question`.
+4. `app/agent/graph.py`: `_route_after_reason` conditional edge, `ask_clarification` wired as a second terminal path alongside `recommend`.
+5. `/chat` route's initial state updated for the two new fields.
+
+**Testing:**
+- Routing (`_route_after_reason`), the `reason` node in isolation (structured-result mapping, missing-context handling via `.get()`, and the empty-`clarification_question` fallback), the trivial `ask_clarification` node, and full-graph integration (including a dedicated clarification-path test asserting `recommend`'s LLM call was never reached) — 49/49 tests passing.
+- The `_mock_llm` test helper from Sprint 5 needed rework: `reason` now also calls `.with_structured_output()`, but with a *different* schema (`ReasoningResult` vs. `classify_intent`'s `IntentClassification`) — a single canned `return_value` can't serve both anymore, so the mock now dispatches on which schema class was requested via `side_effect`.
+- **Manual verification found two real, honest limitations of the local 3B model, not plumbing bugs** — confirmed by inspecting intermediate state directly, not just final text, exactly as in Sprint 5:
+  1. Initially, `needs_clarification` stayed `false` even when `personal_context` explicitly said no history was available — the *mechanism* was proven correct via mocked tests, but the model's *judgment* about when to use it was unreliable until the prompt was made more directive (see above).
+  2. **After that fix, a sharper problem surfaced**: given a seeded injury with `status: recovered` and no restrictions, the model's `analysis` confidently stated status `"recovering"` and a `"no running yet"` restriction — both fabricated, present nowhere in the actual `personal_context` it was given. Verified by dumping `personal_context` and `analysis` side by side. This is outright hallucination with completely correct upstream data and correct plumbing — the single most important finding of this sprint, and a genuine limit of what a 3B local model can be trusted with here.
+- End-to-end through both host and `docker compose`: the clarification path (no `user_id` provided, ankle question) correctly returns a clarifying question instead of generic advice; the normal path with seeded data still produces a full recommendation.
+
+**Learning objectives:**
+- Clarification as a first-class graph *branch* (a real conditional edge to a terminal node), not a special case bolted onto the recommendation prompt.
+- Structured output's actual guarantee: valid shape, not semantic self-consistency between fields — code has to defend against that gap, not just trust the schema.
+- **The core lesson of this sprint**: correct RAG retrieval, correct DB queries, and correct prompt engineering are necessary but not sufficient for a trustworthy personalized system. A small model can hallucinate specific, plausible-sounding facts (a status, a restriction) that directly contradict its own input, with no signal in the output that anything went wrong. This is not fixable by better plumbing — it needs either a larger/more capable model, or a verification step that checks generated claims against source data before they reach the user.
+- Iterating a system prompt against *observed* model behavior (dump intermediate state, see exactly what's wrong, adjust, re-verify) rather than guessing at wording upfront.
+
+**Possible future improvements (not now):** a fact-checking/verification node that cross-references specific claims in `analysis` against `personal_context`/`knowledge_context` before they reach `recommend` (directly targeting the hallucination finding above); a larger or hosted model for sharper context fidelity; multi-turn clarification (currently one question, then the conversation continues as normal client-side — the agent doesn't specifically remember it asked); streaming intermediate steps to the frontend (e.g. "checking your history...") given the multi-call latency.
+
+---
 
 ## Sprint 7: Kubernetes Deployment (preview only)
 

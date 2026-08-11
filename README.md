@@ -2,7 +2,7 @@
 
 A learning-focused project to build a personal AI fitness coach, incrementally, one Scrum-style sprint at a time — while deeply learning the modern AI application stack (agentic systems, LangGraph, RAG, PostgreSQL, FastAPI, Docker, Kubernetes).
 
-Status: **Sprint 5 complete — chat is now a LangGraph agent that decides per-question whether it needs your workout/injury history, expert knowledge, both, or neither, before answering.**
+Status: **Sprint 6 complete — the agent now asks for clarification rather than guessing when it lacks enough personal data to answer safely.** ⚠️ Manual testing also found the local model can hallucinate specific facts (e.g. injury status) that contradict its own retrieved context, even with everything else working correctly — see [PLAN.md](PLAN.md)'s Sprint 6 writeup.
 
 See [PLAN.md](PLAN.md) for the full sprint roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
 
@@ -32,7 +32,9 @@ docker compose up --build
 
 The chat UI now has an optional numeric **User ID** field — create a user via `POST /users` (or `/docs`), note its `id`, and enter it in the chat UI so the agent can pull that user's workout/injury history when a question needs it. Without one, personal-history questions get answered honestly ("no user_id was provided") rather than fabricated.
 
-Expect `/chat` responses to take **20-40+ seconds** — the agent makes up to 3 sequential LLM calls (classify → reason → recommend) plus an embedding call, all against a small local CPU model. This is a real, visible cost of the agentic approach worth noticing, not a bug.
+Expect `/chat` responses to take **20-40+ seconds** — the agent makes up to 3 sequential LLM calls (classify → reason → recommend, or classify → reason → ask_clarification when it decides it doesn't have enough to answer safely) plus an embedding call, all against a small local CPU model. This is a real, visible cost of the agentic approach worth noticing, not a bug.
+
+⚠️ **Trust the plumbing, verify the model.** This project's own testing found the local model can state specific facts (an injury's status, a restriction) that directly contradict the context it was actually given — with everything upstream (retrieval, DB queries, prompt construction) working correctly. Don't take a `/chat` response at face value for anything safety-relevant without checking it against the source data yourself.
 
 Note: the backend and Postgres host ports are `8001` and `5434` (not the defaults `8000`/`5432`) because those were already bound by another local setup on this machine when this project was built. Adjust `docker-compose.yml` / `.env` if that's not the case for you.
 

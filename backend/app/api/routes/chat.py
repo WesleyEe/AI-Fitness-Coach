@@ -27,6 +27,8 @@ async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatRespo
         "personal_context": None,
         "knowledge_context": None,
         "analysis": None,
+        "needs_clarification": False,
+        "clarification_question": None,
         "response": None,
     }
 
