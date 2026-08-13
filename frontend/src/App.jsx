@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Chat from './Chat'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001'
 
 function App() {
   const [health, setHealth] = useState(null)

@@ -7,7 +7,10 @@ app = FastAPI(title="Fitness Coach AI Assistant")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # 5173: Docker Compose's Vite dev server (docker-compose.yml).
+    # 8080: the frontend Service's standard `kubectl port-forward` target for the
+    # K8s/Helm deployment (see README.md / infra/k8s/README.md / infra/helm/README.md).
+    allow_origins=["http://localhost:5173", "http://localhost:8080"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
