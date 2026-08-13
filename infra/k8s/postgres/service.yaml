@@ -1,0 +1,19 @@
+# Headless (clusterIP: None) - the standard pairing for a StatefulSet. Gives each
+# pod a stable DNS name (postgres-0.postgres.fitness-coach.svc.cluster.local)
+# instead of load-balancing across replicas the way a normal Service would -
+# for a database you want to talk to a specific instance, not "whichever one
+# answers." With exactly one replica the practical difference is small right
+# now, but it's the correct pattern to reach for if this ever became a
+# primary/replica setup.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: fitness-coach
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

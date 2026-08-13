@@ -1,0 +1,18 @@
+# Non-secret config. Split from Secret (below) purely by convention - a ConfigMap
+# is just as readable to anyone with cluster access as a Secret is (neither is
+# encrypted at rest by default), the split exists so tooling/humans can tell at a
+# glance what's sensitive vs not, and so secret-scanning/rotation tooling only has
+# to look at Secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: fitness-coach
+data:
+  ENVIRONMENT: "production"
+  # Ollama runs on the host, not in the cluster - host.docker.internal works from
+  # OrbStack's k8s pods the same way it does from Docker Compose containers
+  # (verified empirically before writing these manifests).
+  OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+  OLLAMA_MODEL: "qwen2.5:3b"
+  OLLAMA_EMBED_MODEL: "nomic-embed-text"

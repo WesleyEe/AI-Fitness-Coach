@@ -1,0 +1,7 @@
+# Every resource below targets this namespace explicitly (metadata.namespace) -
+# keeps this project's resources isolated from anything else in the cluster,
+# and everything can be torn down together with `kubectl delete namespace fitness-coach`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fitness-coach

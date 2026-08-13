@@ -1,0 +1,44 @@
+# Default values for the fitness-coach chart. Override any of these with
+# `helm install ... --set key=value` or `-f my-values.yaml` - see
+# infra/helm/README.md for the actual install command used to deploy this
+# locally against OrbStack's Kubernetes.
+
+postgres:
+  image: pgvector/pgvector:pg16
+  user: fitness
+  password: fitness
+  database: fitness_coach
+  storage: 1Gi
+
+backend:
+  image:
+    repository: fitness-coach-backend
+    tag: local
+    pullPolicy: Never # local image built directly into OrbStack's shared image store, not pulled from a registry
+  replicas: 2
+  env:
+    environment: production
+    ollamaBaseUrl: http://host.docker.internal:11434
+    ollamaModel: "qwen2.5:3b"
+    ollamaEmbedModel: nomic-embed-text
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+frontend:
+  image:
+    repository: fitness-coach-frontend
+    tag: local
+    pullPolicy: Never
+  replicas: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi

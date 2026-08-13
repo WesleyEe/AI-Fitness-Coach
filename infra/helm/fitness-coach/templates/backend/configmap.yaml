@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fitness-coach.labels" . | nindent 4 }}
+data:
+  ENVIRONMENT: {{ .Values.backend.env.environment | quote }}
+  OLLAMA_BASE_URL: {{ .Values.backend.env.ollamaBaseUrl | quote }}
+  OLLAMA_MODEL: {{ .Values.backend.env.ollamaModel | quote }}
+  OLLAMA_EMBED_MODEL: {{ .Values.backend.env.ollamaEmbedModel | quote }}

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: fitness-coach
+spec:
+  # 2 replicas deliberately, not 1 - proves the point of backend-migrate being a
+  # separate Job: if migrations were still baked into container startup (like
+  # Sprint 1-6's Docker Compose setup), both replicas would race to run them
+  # concurrently on every rollout.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: fitness-coach-backend:local
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
+          # Readiness: can this pod actually serve right now? Checks real DB
+          # connectivity via /health. Failing readiness pulls the pod out of the
+          # backend Service's load balancing (no traffic sent to it) but does NOT
+          # restart the container - the pod stays up, waiting to become ready again.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # Liveness: is the process itself still alive and responding? Checks
+          # /live, which has no DB dependency - deliberately different from
+          # readiness. If liveness used /health instead, a brief Postgres blip
+          # would make Kubernetes kill and restart backend pods that were
+          # themselves completely fine - restarting the wrong thing for the
+          # problem that actually occurred.
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

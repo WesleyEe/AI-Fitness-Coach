@@ -2,7 +2,7 @@
 
 A learning-focused project to build a personal AI fitness coach, incrementally, one Scrum-style sprint at a time — while deeply learning the modern AI application stack (agentic systems, LangGraph, RAG, PostgreSQL, FastAPI, Docker, Kubernetes).
 
-Status: **Sprint 6 complete — the agent now asks for clarification rather than guessing when it lacks enough personal data to answer safely.** ⚠️ Manual testing also found the local model can hallucinate specific facts (e.g. injury status) that contradict its own retrieved context, even with everything else working correctly — see [PLAN.md](PLAN.md)'s Sprint 6 writeup.
+Status: **All 7 planned sprints complete.** The app runs via Docker Compose (day-to-day dev) or Kubernetes (`infra/k8s/` raw manifests or `infra/helm/` chart — see below). ⚠️ Manual testing in Sprint 6 found the local model can hallucinate specific facts (e.g. injury status) that contradict its own retrieved context, even with everything else working correctly — see [PLAN.md](PLAN.md)'s Sprint 6 writeup.
 
 See [PLAN.md](PLAN.md) for the full sprint roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
 
@@ -24,7 +24,7 @@ docker compose up --build
 - Frontend: http://localhost:5173 — chat UI, plus API/DB status
 - Backend: http://localhost:8001/health — `{"status": "ok", "db_connected": true}`
 - Backend interactive docs: http://localhost:8001/docs — try `users`, `workouts`, `injuries`, `chat`, `rag`
-- The backend container runs `alembic upgrade head` automatically before starting, so the schema is always up to date on `docker compose up`.
+- A one-off `migrate` service runs `alembic upgrade head` before `backend` starts (`docker compose up` waits for it via `depends_on: condition: service_completed_successfully`) — migrations are no longer baked into the backend image's own startup command (see Sprint 7's notes in `PLAN.md` for why: that only works for exactly one instance).
 
 **Requires Ollama running on your host** with both `OLLAMA_MODEL` (default `qwen2.5:3b`) and `OLLAMA_EMBED_MODEL` (default `nomic-embed-text`) pulled — `ollama pull qwen2.5:3b && ollama pull nomic-embed-text`, then just have Ollama running (`ollama serve` or the desktop app) before `docker compose up`. The backend container reaches it via `host.docker.internal`, not `localhost` (see `docker-compose.yml`) — the app itself doesn't run an LLM, it calls out to your existing local Ollama install.
 
@@ -70,3 +70,27 @@ uv run python -m app.rag.ingest
 ```
 
 Safe to re-run after editing a doc in `app/rag/knowledge/` — each file's chunks are cleared and reinserted. This talks to Ollama directly (`OLLAMA_BASE_URL`), so run it against your host `.env` (`localhost:11434`), not while pointed at the Docker-internal URL.
+
+## Kubernetes deployment (Sprint 7)
+
+Two ways to run this on Kubernetes instead of Docker Compose, built and tested against **OrbStack's built-in Kubernetes** (`orb start k8s`):
+
+- **`infra/k8s/`** — plain YAML, applied directly with `kubectl`. Start here if you want to see the raw Kubernetes objects before Helm's templating layer. Full instructions: [infra/k8s/README.md](infra/k8s/README.md).
+- **`infra/helm/`** — the same deployment as a proper Helm chart (`values.yaml`-configurable, migrations run as a Helm hook instead of manual `kubectl apply` ordering). Full instructions: [infra/helm/README.md](infra/helm/README.md).
+
+Both need the same images built locally first:
+```bash
+docker build -t fitness-coach-backend:local ./backend
+docker build -f frontend/Dockerfile.k8s -t fitness-coach-frontend:local --build-arg VITE_API_URL=http://localhost:8001 ./frontend
+```
+
+Quickest path (Helm):
+```bash
+cd infra/helm
+helm install fitness-coach fitness-coach --namespace fitness-coach --create-namespace --wait --timeout 3m
+kubectl -n fitness-coach port-forward svc/backend 8001:8000 &
+kubectl -n fitness-coach port-forward svc/frontend 8080:80 &
+```
+Then ingest the knowledge base into *this* cluster's Postgres (a separate database from Docker Compose's — see the Helm README) before expecting `/chat` to say anything useful.
+
+GitOps (Argo CD/Flux) is covered conceptually, not implemented, in [GITOPS.md](GITOPS.md) — and why not, honestly.

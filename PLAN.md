@@ -10,7 +10,7 @@ Each sprint = one reviewable increment. We stop after each one for your review b
 | 4 | RAG system | Chunking, embeddings, pgvector similarity search, naive vs. agentic retrieval |
 | 5 | LangGraph agent | State graphs, conditional edges, structured output, multi-step reasoning |
 | 6 | Personalized coaching intelligence | Clarification loops, structured output's real limits, LLM hallucination despite correct context |
-| 7 | Kubernetes deployment | Cloud-native concepts, manifests, Helm |
+| 7 | Kubernetes deployment | StatefulSets, Jobs, probes, Helm hook ordering, GitOps concepts |
 
 ---
 
@@ -233,10 +233,48 @@ START → classify_intent → [cond] → fetch_context → reason → [cond] →
 
 ---
 
-## Sprint 7: Kubernetes Deployment (preview only)
+## Sprint 7: Kubernetes Deployment
 
-Production-shaped container images, K8s manifests, Helm chart, secrets management, decide together on local (kind/minikube) vs. cloud target.
+**Goal:** Move from Docker Compose to Kubernetes — production-shaped images, raw manifests first (to see the actual objects before Helm abstracts them), then a Helm chart, then a conceptual (not implemented) look at GitOps. Target: **local Kubernetes via OrbStack's built-in cluster** — a real, explicit decision, not a default; asked the user directly rather than assuming, given cloud would mean real billing/access and this project has stayed local-only throughout.
+
+**Architecture for this sprint:**
+- **Production-shaped images**: backend's `Dockerfile` rebuilt multi-stage (builder installs deps, final stage copies only the built venv + app code) and runs as a non-root user. Frontend gets a **new** `Dockerfile.k8s` — Compose's image runs Vite's dev server (hot reload, unoptimized); this one is a genuinely different shape: `npm run build` in a build stage, static files served by `nginx` in the final stage. Worth keeping these separate rather than papering over a real difference between dev and prod image shapes.
+- **Fixed a real correctness issue, not just for Kubernetes**: Sprints 1-6's backend image baked `alembic upgrade head && uvicorn ...` into one startup command — fine for exactly one instance, actively wrong the moment there's more than one (every replica would race to apply migrations concurrently). Fixed at the *image* level: the image now just serves; migrations became a separate one-off command the orchestrator runs — a new `migrate` service in `docker-compose.yml` (using `depends_on: condition: service_completed_successfully`), and a Kubernetes `Job` for the cluster. Same fix, expressed two ways, in the two orchestrators this project now supports.
+- **`/health` vs `/live` split, implemented**: Sprint 1's own `PLAN.md` flagged this gap and explicitly deferred it to here. `/health` (readiness) checks real DB connectivity, unchanged; a new `/live` (liveness) deliberately has no dependencies — checking DB connectivity in a liveness probe would make Kubernetes kill and restart backend pods over a transient Postgres blip that wasn't actually the backend process's problem.
+- **`postgres` as a `StatefulSet`+`PersistentVolumeClaim`**, not a `Deployment` — stable identity and storage that survives rescheduling, which a `Deployment`'s interchangeable-pods model doesn't guarantee. `backend`/`frontend` are ordinary `Deployment`s (2 replicas each) — genuinely interchangeable, load-balanced via a normal `Service`.
+- **Raw manifests (`infra/k8s/`) before the Helm chart (`infra/helm/fitness-coach/`)** — deliberately, so the underlying Kubernetes objects are visible before Helm's templating sits on top. The Helm chart formalizes the raw manifests' manual `kubectl apply` ordering as a proper hook-based lifecycle, and composes `DATABASE_URL` from one templated source (`.Values.postgres.*`) instead of the raw manifests' hand-duplicated password across two files.
+- **GitOps (`GITOPS.md`)**: conceptual only. Explains what Argo CD/Flux would actually change (a controller reconciling cluster state against git, continuously, instead of humans running `kubectl apply`) and honestly why it isn't implemented — it needs a long-lived cluster and a real git remote, neither of which fits a local, commit-free learning project.
+
+**Implementation tasks:**
+1. `backend/Dockerfile` → multi-stage, non-root, no baked-in migration step.
+2. `frontend/Dockerfile.k8s` + `frontend/nginx.conf` — new production image, verified by building and running it standalone before writing any K8s manifests around it.
+3. `docker-compose.yml` gained a `migrate` service; `backend` now depends on it completing, not on running migrations itself.
+4. `app/api/routes/health.py` — new `/live` endpoint, `/health`'s docstring clarified as the readiness-specific one.
+5. `infra/k8s/`: `namespace.yaml`, `postgres/` (Secret, StatefulSet, headless Service), `backend/` (ConfigMap, Secret, migration Job, Deployment, Service), `frontend/` (Deployment, Service) — all with resource requests/limits and readiness/liveness probes.
+6. `infra/helm/fitness-coach/`: `Chart.yaml`, `values.yaml`, templated versions of every raw manifest, `_helpers.tpl` for shared labels, migration Job as a proper hook.
+7. `GITOPS.md`.
+
+**Testing:**
+- Verified OrbStack's Kubernetes tooling and networking assumptions *before* designing around them, not after: confirmed `host.docker.internal` reaches host Ollama from pods (same as Compose), and separately confirmed `LoadBalancer` Services stay `<pending>` (no cloud-controller-manager) but `ClusterIP` addresses are directly reachable from the host anyway (an OrbStack-specific bonus) — decided to design around the portable, standard `kubectl port-forward` pattern rather than lean on that bonus, so the manifests would still work on `kind`/`minikube`/a real cluster.
+- Backend/frontend images built and smoke-tested standalone (`docker run`) before any K8s manifest referenced them.
+- Raw manifests applied in dependency order, each step's readiness verified (`rollout status`, `wait --for=condition=complete`) before moving to the next — postgres → migration Job (logs checked, confirmed both migrations ran from empty) → backend/frontend Deployments (2/2 ready).
+- Full functional test through the deployed stack via `port-forward`: `/health`, `/live`, and — after ingesting the knowledge base into this cluster's *separate* Postgres PVC (a real, easy-to-forget gotcha: it's a different database from Compose's, not shared) — `/chat` and `/rag/search` both verified working, reaching host Ollama through the cluster network.
+- **Hit and fixed a genuine Helm ordering bug, not a hypothetical one**: first attempt used a `pre-install,pre-upgrade` hook for the migration Job, which seemed obviously correct ("migrate before the app starts"). It hung — `pre-install` hooks run *before any of the chart's normal resources exist at all*, including the postgres `StatefulSet`, so the Job was racing to connect to a Postgres that hadn't been created yet. Fixed by switching to `post-install,post-upgrade` (runs after normal resources exist) combined with an `initContainer` that polls until Postgres actually accepts connections (bridging the real remaining gap: created-but-not-yet-ready, not created-vs-not-created).
+- `helm lint` and `helm template` run before ever installing, to catch templating errors cheaply.
+- Both `helm install` (fresh cluster, confirmed via checking `\dt` inside the postgres pod that migrations created all 8 tables from nothing) and `helm upgrade` (confirmed the hook re-runs cleanly on a second release, and that data survived — 20 knowledge chunks still present afterward) tested, not just install.
+- Confirmed **Docker Compose still works end-to-end** after the shared `Dockerfile` and route changes — this sprint touched files every prior sprint's setup depends on, so regressing Compose would have been a real risk worth explicitly ruling out, not assuming away.
+- Full backend pytest suite (50 tests, including the new `/live` test) run and passing throughout.
+
+**Learning objectives:**
+- `StatefulSet` vs `Deployment`: when stable identity/storage actually matters (a database) vs. when interchangeable replicas are exactly what's wanted (a stateless API).
+- Readiness vs. liveness probes are answering genuinely different questions ("should this pod receive traffic right now" vs. "should Kubernetes restart this container") — conflating them, as Sprint 1 originally did by only having one `/health` endpoint, has a real failure mode (a dependency blip causing unnecessary container restarts).
+- A `Job` as the correct primitive for "run this once, regardless of replica count" — and why that's a different concern from a `Deployment`, not a smaller version of one.
+- **Helm hook lifecycle is a real thing to understand precisely, not pattern-match from a tutorial**: `pre-install` genuinely means before *any* chart resource exists, not just "early." Getting this wrong doesn't fail loudly with a clear error — it hangs, and the fix required understanding the actual execution model, not just trying annotations until something worked.
+- Verifying infrastructure changes the same way this project has verified LLM behavior since Sprint 5: don't assume a networking/tooling assumption holds, test it empirically first (`host.docker.internal`, `LoadBalancer` support) before designing around it.
+- Multi-stage Docker builds as the mechanism for "this image should not contain build tools/dev dependencies" — concretely smaller, and concretely why the final image couldn't just run `uv run` anymore (the `uv` binary itself was builder-stage-only).
+
+**Possible future improvements (not now):** solving the backend-pods-ready-before-migration-completes race properly (a fact this sprint documented rather than solved — see `infra/helm/README.md`'s "Known limitation" section) rather than accepting it; runtime (not build-time) frontend config injection, so `VITE_API_URL` doesn't require a rebuild per environment; an actual Ingress instead of `port-forward`, once there's a real reason to expose this beyond local access; implementing the GitOps setup `GITOPS.md` describes, once there's a real git remote and a reason to keep a cluster running continuously; Sealed Secrets or External Secrets Operator instead of plaintext `stringData`.
 
 ---
 
-Later sprints will get this same level of detail (goal, architecture, tasks, testing, learning objectives, future improvements) when we get there — not before, so decisions reflect what we actually learned in prior sprints rather than upfront guessing.
+This concludes the planned 7-sprint roadmap. Later additions (if any) would get this same level of detail (goal, architecture, tasks, testing, learning objectives, future improvements) before being built — not before, so decisions reflect what was actually learned in prior sprints rather than upfront guessing.

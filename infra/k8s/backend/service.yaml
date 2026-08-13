@@ -1,0 +1,14 @@
+# Normal (non-headless) ClusterIP - unlike postgres, backend pods ARE
+# interchangeable, so load-balancing traffic across the 2 replicas is exactly
+# what's wanted here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: fitness-coach
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000

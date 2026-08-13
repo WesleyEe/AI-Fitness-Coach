@@ -15,6 +15,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-off: applies migrations then exits. Uses the same image as `backend`
+  # but overrides its CMD - the image itself no longer bakes "migrate then
+  # serve" into one startup command (see backend/Dockerfile), so this is where
+  # that decision now lives, decoupled from how many backend replicas exist.
+  migrate:
+    build: ./backend
+    # No `uv run` prefix - the final image only ships the built venv, not the uv
+    # binary itself (that's builder-stage-only, see backend/Dockerfile). PATH
+    # already points at the venv's bin/, so `alembic` resolves directly.
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://fitness:fitness@postgres:5432/fitness_coach}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
     build: ./backend
     environment:
@@ -22,11 +38,14 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
     ports:
       - "8001:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - ./backend/app:/app/app
     extra_hosts:
@@ -37,7 +56,7 @@ services:
   frontend:
     build: ./frontend
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8001}
     ports:
       - "5173:5173"
     depends_on:

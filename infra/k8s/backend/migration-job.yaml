@@ -1,0 +1,27 @@
+# Runs `alembic upgrade head` once and exits - this is exactly why backend/Dockerfile
+# no longer bakes migrations into its default CMD (see the comment there). Same
+# image as the Deployment below, different command, run as a one-off regardless of
+# how many backend replicas exist. Apply this and wait for it to complete BEFORE
+# the backend Deployment - see infra/k8s/README.md for the apply order (the Helm
+# chart formalizes this ordering properly via a pre-upgrade hook instead of relying
+# on manual apply order).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: fitness-coach
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: fitness-coach-backend:local
+          imagePullPolicy: Never
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets

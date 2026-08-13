@@ -1,0 +1,28 @@
+# --- build: produce an optimized static bundle ---
+FROM node:22-slim AS build
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install
+COPY . .
+
+# Vite bakes VITE_API_URL into the built JS at BUILD time, not read at container
+# runtime the way a backend reads env vars at process start - there's no "process"
+# left once this is static HTML/JS served by nginx. That means changing the
+# backend URL means rebuilding this image, not just changing a Deployment's env
+# vars - a genuine, common gotcha with static frontends in Kubernetes. The
+# properly production-grade fix is a small entrypoint script that generates a
+# runtime config.js from env vars when the container starts (nginx serves it
+# alongside the static bundle, and the app reads window.__ENV__ instead of
+# import.meta.env) - not implemented here, noted as a future improvement.
+ARG VITE_API_URL=http://localhost:8001
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build
+
+# --- final: serve the static bundle with nginx ---
+FROM nginx:alpine AS final
+
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80

@@ -1,0 +1,63 @@
+# The raw-manifest version of this (infra/k8s/backend/migration-job.yaml) had to
+# be applied and waited-on manually, in the right order, before the backend
+# Deployment. Helm hooks formalize that ordering as part of the chart itself -
+# but getting the ordering actually right took two attempts, both worth
+# recording:
+#
+# Attempt 1 (wrong): "pre-install,pre-upgrade" seemed like the obvious choice -
+# run migrations before the app's resources exist. But pre-install hooks run
+# BEFORE ANY of the chart's normal templated resources are created at all,
+# including the postgres StatefulSet - so this Job raced to connect to a
+# "postgres" Service that didn't exist yet and hung/failed.
+#
+# Attempt 2 (this one): "post-install,post-upgrade" instead. These run AFTER
+# Helm creates the chart's normal resources (postgres, backend, frontend) -
+# so postgres and the backend Deployment already exist by the time this runs.
+# postgres might not be READY yet though (container still starting), which is
+# what the initContainer below actually solves: a genuine "wait until ready,"
+# not a "wait until it exists" problem.
+#
+# Known limitation, documented rather than solved: backend pods are created in
+# that same normal-resources phase as postgres, in parallel with it - their
+# own readinessProbe (/health) only checks generic DB connectivity, not
+# whether the schema/tables this migration creates actually exist yet. On a
+# brand-new cluster's first `helm install`, there's a small window where
+# backend pods report ready and could receive traffic before this migration
+# Job finishes. This is a known-hard problem with self-contained charts that
+# own both an app and its database - production setups often sidestep it
+# entirely by deploying the database as a separate, independently-managed
+# dependency the app chart doesn't own, rather than solving the ordering
+# within one chart.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-backend-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fitness-coach.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until nc -z postgres 5432; do echo "waiting for postgres..."; sleep 2; done
+      containers:
+        - name: migrate
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secrets
