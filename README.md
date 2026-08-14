@@ -1,96 +1,133 @@
 # Fitness Coach AI Assistant
 
-A learning-focused project to build a personal AI fitness coach, incrementally, one Scrum-style sprint at a time — while deeply learning the modern AI application stack (agentic systems, LangGraph, RAG, PostgreSQL, FastAPI, Docker, Kubernetes).
+A full-stack, agentic AI application: a personalized fitness coach that combines a
+user's own workout/injury history with a retrieval-augmented expert knowledge base,
+reasons over both through a LangGraph state machine, and asks for clarification
+instead of guessing when it doesn't have enough to answer safely.
 
-Status: **All 7 planned sprints complete.** The app runs via Docker Compose (day-to-day dev) or Kubernetes (`infra/k8s/` raw manifests or `infra/helm/` chart — see below). ⚠️ Manual testing in Sprint 6 found the local model can hallucinate specific facts (e.g. injury status) that contradict its own retrieved context, even with everything else working correctly — see [PLAN.md](PLAN.md)'s Sprint 6 writeup.
+Built end-to-end — schema design, API, RAG pipeline, agent orchestration, test
+suite, containerization, and a Kubernetes deployment (raw manifests + a Helm chart)
+— as a demonstration of the modern AI-application stack, not just a model wrapped in
+a chat box.
 
-See [PLAN.md](PLAN.md) for the full sprint roadmap and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
+**Status:** feature-complete, all layers implemented and tested (Docker Compose and
+Kubernetes deployments both verified working end to end).
 
-## Ground rules for this project
+## What this project shows
 
-- Build stage by stage. Do not skip ahead.
-- Each sprint ends with a working, demoable increment.
-- Explain *why* before writing *how*.
-- Stop after each sprint for review before continuing.
-- Git commits are handled by the user, not by Claude.
+- **LLM orchestration beyond a single prompt.** A [LangGraph](backend/app/agent/graph.py)
+  state machine with real conditional routing: an intent-classification step decides
+  — per question, via structured LLM output, not a keyword rule — whether a query
+  needs the user's personal history, expert reference material, both, or neither,
+  before a separate reasoning step decides whether to answer or ask a clarifying
+  question first.
+- **Retrieval-augmented generation, done properly.** Markdown knowledge base →
+  heading-aware chunking → `pgvector`-backed embedding search (HNSW index, cosine
+  similarity) → context injection, with a dedicated `/rag/search` endpoint for
+  inspecting retrieval quality independent of the chat flow.
+- **Real database design.** Structured, normalized schema (a generic `workouts`
+  table plus sport-specific detail tables joined by `workout_id`, rather than one
+  wide sparse table), managed with Alembic migrations from day one.
+- **Production-shaped containers, not dev-only ones.** Multi-stage, non-root
+  Docker images; a separate `/health` (readiness) vs `/live` (liveness) split;
+  migrations run as a one-off Job/service rather than baked into the app's startup
+  command, so they're safe under multiple replicas.
+- **Kubernetes deployment, two ways.** Raw manifests (`infra/k8s/`) and an
+  equivalent Helm chart (`infra/helm/`) — `StatefulSet` + PVC for Postgres,
+  `Deployment` + `Service` for the stateless API/frontend, resource limits and
+  probes throughout, migration ordering handled via a Helm post-install hook with
+  a readiness-polling init container.
+- **A real test suite.** 50 backend tests — route tests, node-level agent tests,
+  full-graph integration tests, and DB-backed tests against real Postgres (not
+  SQLite) where the schema uses Postgres-native types — plus routing logic tested
+  as pure functions, independent of any LLM call.
+- **Honest evaluation of the model, not just the plumbing.** Manual verification
+  went past "does it respond" to inspecting intermediate agent state directly,
+  which surfaced a genuine finding: the local 3B model can state specific facts
+  that contradict its own retrieved context, with correct retrieval, correct DB
+  queries, and correct prompting upstream. That distinction — and how to catch it
+  — is documented in [PLAN.md](PLAN.md)'s Sprint 6 writeup, along with the rest of
+  the engineering decisions made throughout the build.
 
-## Running the stack
+## Architecture
+
+```
+                        ┌─────────────────────┐
+                        │   React Frontend     │
+                        │  (chat + data views)  │
+                        └──────────┬───────────┘
+                                   │ REST / SSE
+                        ┌──────────▼───────────┐
+                        │     FastAPI Backend   │
+                        │                       │
+                        │  ┌─────────────────┐  │
+                        │  │  LangGraph Agent │  │
+                        │  │                 │  │
+                        │  │  Intent → Plan  │  │
+                        │  │  → Tools → Answer│  │
+                        │  └───┬─────────┬───┘  │
+                        └──────┼─────────┼───────┘
+                               │         │
+                 ┌─────────────▼───┐  ┌──▼──────────────┐
+                 │   PostgreSQL     │  │  PostgreSQL +    │
+                 │  (structured:    │  │  pgvector         │
+                 │  users, workouts,│  │  (RAG knowledge   │
+                 │  sports, injury) │  │  base embeddings) │
+                 └──────────────────┘  └──────────────────┘
+```
+
+One PostgreSQL instance covers both structured relational data and vector search
+(via the `pgvector` extension) — a deliberate simplification over running a separate
+vector database, sized appropriately for this project's scale. Full rationale and
+the complete data model are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+The agent graph itself:
+
+```
+START → classify_intent → [conditional] → fetch_context → reason → [conditional] → recommend → END
+                        ↘ nothing needed ────────────────↗        ↘ ask_clarification → END
+```
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Backend | FastAPI, SQLAlchemy 2.0, Alembic, Pydantic |
+| Agent orchestration | LangGraph — explicit state machine, structured output, conditional routing |
+| LLM / embeddings | LangChain model wrappers over a local Ollama runtime (Qwen + nomic-embed-text) |
+| Data | PostgreSQL + `pgvector` (HNSW index, cosine similarity) |
+| Frontend | React (Vite) |
+| Testing | pytest, real Postgres for DB-dependent tests, mocked LLM calls for deterministic unit tests |
+| Containerization | Docker / Docker Compose |
+| Orchestration | Kubernetes — raw manifests and a Helm chart, `StatefulSet` + `Deployment` + `Job`, readiness/liveness probes |
+
+## Quick start
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-- Frontend: http://localhost:5173 — chat UI, plus API/DB status
-- Backend: http://localhost:8001/health — `{"status": "ok", "db_connected": true}`
-- Backend interactive docs: http://localhost:8001/docs — try `users`, `workouts`, `injuries`, `chat`, `rag`
-- A one-off `migrate` service runs `alembic upgrade head` before `backend` starts (`docker compose up` waits for it via `depends_on: condition: service_completed_successfully`) — migrations are no longer baked into the backend image's own startup command (see Sprint 7's notes in `PLAN.md` for why: that only works for exactly one instance).
+Then open http://localhost:5173. Full setup (Ollama models, knowledge base
+ingestion, Kubernetes deployment) is in [DEPLOYMENT.md](DEPLOYMENT.md).
 
-**Requires Ollama running on your host** with both `OLLAMA_MODEL` (default `qwen2.5:3b`) and `OLLAMA_EMBED_MODEL` (default `nomic-embed-text`) pulled — `ollama pull qwen2.5:3b && ollama pull nomic-embed-text`, then just have Ollama running (`ollama serve` or the desktop app) before `docker compose up`. The backend container reaches it via `host.docker.internal`, not `localhost` (see `docker-compose.yml`) — the app itself doesn't run an LLM, it calls out to your existing local Ollama install.
+## Documentation
 
-**Requires the knowledge base to be ingested at least once** (see below) before `/chat` or `/rag/search` will have anything meaningful to retrieve — this doesn't happen automatically on `docker compose up`, since it's a content-population step, not a schema migration.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system design, technology choices and why,
+  data model
+- [PLAN.md](PLAN.md) — the full engineering log: every stage's goal, architecture,
+  implementation, testing, and what was learned building it
+- [DEPLOYMENT.md](DEPLOYMENT.md) — running the stack locally (Docker Compose) or on
+  Kubernetes (raw manifests or Helm)
+- [GITOPS.md](GITOPS.md) — what a GitOps rollout (Argo CD/Flux) would look like on
+  top of the existing Helm chart, and why it isn't part of this project's scope
 
-The chat UI now has an optional numeric **User ID** field — create a user via `POST /users` (or `/docs`), note its `id`, and enter it in the chat UI so the agent can pull that user's workout/injury history when a question needs it. Without one, personal-history questions get answered honestly ("no user_id was provided") rather than fabricated.
+## A known, documented limitation
 
-Expect `/chat` responses to take **20-40+ seconds** — the agent makes up to 3 sequential LLM calls (classify → reason → recommend, or classify → reason → ask_clarification when it decides it doesn't have enough to answer safely) plus an embedding call, all against a small local CPU model. This is a real, visible cost of the agentic approach worth noticing, not a bug.
-
-⚠️ **Trust the plumbing, verify the model.** This project's own testing found the local model can state specific facts (an injury's status, a restriction) that directly contradict the context it was actually given — with everything upstream (retrieval, DB queries, prompt construction) working correctly. Don't take a `/chat` response at face value for anything safety-relevant without checking it against the source data yourself.
-
-Note: the backend and Postgres host ports are `8001` and `5434` (not the defaults `8000`/`5432`) because those were already bound by another local setup on this machine when this project was built. Adjust `docker-compose.yml` / `.env` if that's not the case for you.
-
-Note: the Postgres image used is `pgvector/pgvector:pg16` — a drop-in Postgres 16 with the `pgvector` extension preinstalled, used since Sprint 4 for the RAG knowledge base.
-
-## Backend development (running on the host, outside Docker)
-
-```bash
-cd backend
-cp .env.example .env   # points at localhost:5434, not the "postgres" Docker service name
-uv sync
-```
-
-Run tests (needs Postgres reachable — `docker compose up -d postgres` first):
-
-```bash
-uv run pytest
-```
-
-Create/apply migrations after changing a model in `app/models/`:
-
-```bash
-uv run alembic revision --autogenerate -m "describe the change"
-uv run alembic upgrade head
-```
-
-Always review an autogenerated migration before applying it — Alembic is good but not infallible, especially around renames and type changes.
-
-Ingest the RAG knowledge base (needed for `/chat` and `/rag/search` to return anything useful):
-
-```bash
-uv run python -m app.rag.ingest
-```
-
-Safe to re-run after editing a doc in `app/rag/knowledge/` — each file's chunks are cleared and reinserted. This talks to Ollama directly (`OLLAMA_BASE_URL`), so run it against your host `.env` (`localhost:11434`), not while pointed at the Docker-internal URL.
-
-## Kubernetes deployment (Sprint 7)
-
-Two ways to run this on Kubernetes instead of Docker Compose, built and tested against **OrbStack's built-in Kubernetes** (`orb start k8s`):
-
-- **`infra/k8s/`** — plain YAML, applied directly with `kubectl`. Start here if you want to see the raw Kubernetes objects before Helm's templating layer. Full instructions: [infra/k8s/README.md](infra/k8s/README.md).
-- **`infra/helm/`** — the same deployment as a proper Helm chart (`values.yaml`-configurable, migrations run as a Helm hook instead of manual `kubectl apply` ordering). Full instructions: [infra/helm/README.md](infra/helm/README.md).
-
-Both need the same images built locally first:
-```bash
-docker build -t fitness-coach-backend:local ./backend
-docker build -f frontend/Dockerfile.k8s -t fitness-coach-frontend:local --build-arg VITE_API_URL=http://localhost:8001 ./frontend
-```
-
-Quickest path (Helm):
-```bash
-cd infra/helm
-helm install fitness-coach fitness-coach --namespace fitness-coach --create-namespace --wait --timeout 3m
-kubectl -n fitness-coach port-forward svc/backend 8001:8000 &
-kubectl -n fitness-coach port-forward svc/frontend 8080:80 &
-```
-Then ingest the knowledge base into *this* cluster's Postgres (a separate database from Docker Compose's — see the Helm README) before expecting `/chat` to say anything useful.
-
-GitOps (Argo CD/Flux) is covered conceptually, not implemented, in [GITOPS.md](GITOPS.md) — and why not, honestly.
+The local 3B model this project runs against can occasionally state specific facts
+(an injury's status, a restriction) that contradict its own retrieved context, even
+when retrieval, database queries, and prompt construction are all working correctly.
+This isn't a plumbing bug — it's a real limit of a small local model's context
+fidelity, caught by verifying intermediate agent state rather than trusting final
+output, and it's the kind of thing a larger or hosted model would meaningfully
+reduce. See [PLAN.md](PLAN.md)'s Sprint 6 section for the full investigation.

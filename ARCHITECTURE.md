@@ -131,4 +131,4 @@ Key learning point: the agent's "tools" are just the Sprint 2 CRUD APIs and the 
 - No auth/multi-user system until it's needed (Sprint 1–5 assume a single default user).
 - No streaming UI polish until the chat mechanics work.
 - No microservices split — one backend service throughout Compose sprints.
-- No managed cloud DB/hosting — everything local until Kubernetes sprint, and even then we can target local K8s (kind/minikube) rather than a cloud bill, if you prefer. We'll decide together in Sprint 7.
+- No managed cloud DB/hosting — everything local until the Kubernetes sprint, and even then targeting local K8s (kind/minikube) rather than a cloud bill, by design.

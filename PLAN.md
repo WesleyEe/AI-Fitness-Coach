@@ -1,6 +1,6 @@
 # Sprint Roadmap
 
-Each sprint = one reviewable increment. We stop after each one for your review before continuing. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design these sprints build toward.
+Each sprint is one reviewable increment, closed out before the next one starts. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design these sprints build toward.
 
 | Sprint | Theme | Key learning |
 |---|---|---|
@@ -22,7 +22,7 @@ Each sprint = one reviewable increment. We stop after each one for your review b
 Three containers via Docker Compose: `postgres` (empty DB, just proving connectivity), `backend` (FastAPI with a `/health` endpoint that also checks DB connectivity), `frontend` (React app with one page that calls `/health` and displays status). No business logic yet — this sprint is purely about the scaffolding and the seams between services.
 
 **Implementation tasks:**
-1. Repo structure: `backend/`, `frontend/`, `infra/` (or `docker-compose.yml` at root — your call, I'll ask).
+1. Repo structure: `backend/`, `frontend/`, `infra/`, `docker-compose.yml` at root.
 2. `backend`: FastAPI app, `pydantic-settings` config, SQLAlchemy engine pointed at Postgres, `GET /health` returning `{status, db_connected}`.
 3. `frontend`: Minimal Vite + React app, one page fetching `/health` and rendering the result — proves CORS/networking is correct.
 4. `docker-compose.yml`: three services, a named volume for Postgres data, `.env.example` for config, sensible service dependencies (`depends_on` + a DB healthcheck).
@@ -235,7 +235,7 @@ START → classify_intent → [cond] → fetch_context → reason → [cond] →
 
 ## Sprint 7: Kubernetes Deployment
 
-**Goal:** Move from Docker Compose to Kubernetes — production-shaped images, raw manifests first (to see the actual objects before Helm abstracts them), then a Helm chart, then a conceptual (not implemented) look at GitOps. Target: **local Kubernetes via OrbStack's built-in cluster** — a real, explicit decision, not a default; asked the user directly rather than assuming, given cloud would mean real billing/access and this project has stayed local-only throughout.
+**Goal:** Move from Docker Compose to Kubernetes — production-shaped images, raw manifests first (to see the actual objects before Helm abstracts them), then a Helm chart, then a conceptual (not implemented) look at GitOps. Target: **local Kubernetes via OrbStack's built-in cluster** — a deliberate, explicit choice, not a default, given cloud would mean real billing/access and this project has stayed local-only throughout.
 
 **Architecture for this sprint:**
 - **Production-shaped images**: backend's `Dockerfile` rebuilt multi-stage (builder installs deps, final stage copies only the built venv + app code) and runs as a non-root user. Frontend gets a **new** `Dockerfile.k8s` — Compose's image runs Vite's dev server (hot reload, unoptimized); this one is a genuinely different shape: `npm run build` in a build stage, static files served by `nginx` in the final stage. Worth keeping these separate rather than papering over a real difference between dev and prod image shapes.
