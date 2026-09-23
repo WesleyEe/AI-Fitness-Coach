@@ -21,6 +21,8 @@ async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatRespo
     initial_state = {
         "messages": messages,
         "user_id": payload.user_id,
+        "blocked": False,
+        "block_reason": None,
         "needs_personal_data": False,
         "needs_expert_knowledge": False,
         "classification_reasoning": "",
@@ -29,6 +31,7 @@ async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatRespo
         "analysis": None,
         "needs_clarification": False,
         "clarification_question": None,
+        "unsupported_claims": None,
         "response": None,
     }
 

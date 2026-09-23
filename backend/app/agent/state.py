@@ -17,6 +17,10 @@ class AgentState(TypedDict):
     messages: list[BaseMessage]  # full conversation so far, oldest first
     user_id: int | None
 
+    # Set by input_guardrail
+    blocked: bool
+    block_reason: str | None
+
     # Set by classify_intent
     needs_personal_data: bool
     needs_expert_knowledge: bool
@@ -31,5 +35,9 @@ class AgentState(TypedDict):
     needs_clarification: bool
     clarification_question: str | None
 
-    # Set by recommend or ask_clarification - the final answer returned to the user
+    # Set by verify_grounding, only when it flags an ungrounded claim
+    unsupported_claims: list[str] | None
+
+    # Set by recommend, ask_clarification, or input_guardrail (when blocked) -
+    # the final answer returned to the user
     response: str | None

@@ -121,8 +121,12 @@ ingestion, Kubernetes deployment) is in [DEPLOYMENT.md](DEPLOYMENT.md).
   Kubernetes (raw manifests or Helm)
 - [GITOPS.md](GITOPS.md) — what a GitOps rollout (Argo CD/Flux) would look like on
   top of the existing Helm chart, and why it isn't part of this project's scope
+- [EVALS_AND_GUARDRAILS.md](EVALS_AND_GUARDRAILS.md) — the runtime guardrails
+  (deterministic input screening, an LLM-based groundedness check) and the offline
+  eval harness that measures them against the real model, plus the reasoning
+  behind building each the way it's built
 
-## A known, documented limitation
+## A known, documented limitation — and what now mitigates it
 
 The local 3B model this project runs against can occasionally state specific facts
 (an injury's status, a restriction) that contradict its own retrieved context, even
@@ -131,3 +135,10 @@ This isn't a plumbing bug — it's a real limit of a small local model's context
 fidelity, caught by verifying intermediate agent state rather than trusting final
 output, and it's the kind of thing a larger or hosted model would meaningfully
 reduce. See [PLAN.md](PLAN.md)'s Sprint 6 section for the full investigation.
+
+A `verify_grounding` guardrail node now catches this at request time — a second,
+narrow LLM call that checks the reasoning step's claims against the actual
+retrieved context and asks the user to confirm rather than let a fabricated claim
+through — and an eval suite reproduces the exact Sprint 6 scenario against the
+real model to measure, on an ongoing basis, whether that guardrail is actually
+catching it. See [EVALS_AND_GUARDRAILS.md](EVALS_AND_GUARDRAILS.md).
